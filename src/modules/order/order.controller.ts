@@ -15,7 +15,7 @@ export class OrderController {
   constructor(private readonly orderService: OrderService) {}
 
   @Post()
-  @HttpCode(HttpStatus.CREATED)
+  @HttpCode(HttpStatus.ACCEPTED)
   createOrder(@Body() dto: CreateOrderDto) {
     return this.orderService.createOrderSync(dto);
   }

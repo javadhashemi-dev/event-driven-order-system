@@ -18,7 +18,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+  redis:
+    image: redis:7-alpine
+    container_name: order_system_redis
+    restart: unless-stopped
+    command: redis-server --requirepass redispassword
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'redispassword', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
     driver: local
