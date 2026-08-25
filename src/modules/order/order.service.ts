@@ -1,20 +1,16 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../core/database/prisma.service.js';
 import { OrderStatus } from '../../generated/prisma/enums.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
 import { Decimal } from '@prisma/client/runtime/client';
 import { InjectQueue } from '@nestjs/bullmq';
-import {
-  ORDER_QUEUE,
-  OrderJobs,
-  ProcessOrderJobPayload,
-} from './order.constants.js';
+
 import { Queue } from 'bullmq';
+import {
+  OrderCreatedPayload,
+  QUEUES,
+  SAGA_EVENTS,
+} from '../../common/events/saga.events.js';
 
 @Injectable()
 export class OrderService {
@@ -22,7 +18,7 @@ export class OrderService {
 
   constructor(
     private readonly prisma: PrismaService,
-    @InjectQueue(ORDER_QUEUE) private readonly orderQueue: Queue,
+    @InjectQueue(QUEUES.INVENTORY) private readonly inventoryQueue: Queue,
   ) {}
 
   async createOrderSync(dto: CreateOrderDto) {
@@ -71,7 +67,7 @@ export class OrderService {
     });
 
     // 3. Enqueue background processing job
-    const payload: ProcessOrderJobPayload = {
+    const payload: OrderCreatedPayload = {
       orderId: order.id,
       customerId: order.customerId,
       items: itemsToCreate.map((i) => ({
@@ -82,7 +78,7 @@ export class OrderService {
       totalAmount,
     };
 
-    await this.orderQueue.add(OrderJobs.PROCESS_ORDER, payload, {
+    await this.inventoryQueue.add(SAGA_EVENTS.ORDER_CREATED, payload, {
       attempts: 3,
       backoff: {
         type: 'exponential',

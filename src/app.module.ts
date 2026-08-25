@@ -6,9 +6,15 @@ import { appConfig } from './modules/config/app.config.js';
 import { PrismaModule } from './core/database/prisma.module.js';
 import { redisConfig } from './modules/config/redis.config.js';
 import { BullModule } from '@nestjs/bullmq';
+import { InventoryModule } from './modules/inventory/inventory.module.js';
+import { PaymentModule } from './modules/payment/payment.module.js';
+import { NotificationModule } from './modules/notification/notification.module.js';
 
 @Module({
   imports: [
+    InventoryModule,
+    PaymentModule,
+    NotificationModule,
     OrderModule,
     PrismaModule,
     HealthModule,

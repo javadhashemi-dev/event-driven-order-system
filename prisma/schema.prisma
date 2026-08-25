@@ -18,8 +18,17 @@ datasource db {
 
 enum OrderStatus {
   PENDING
+  INVENTORY_RESERVED
+  PAYMENT_PENDING
   CONFIRMED
   CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
 }
 
 // -----------------------------------------------------------------------------
@@ -48,7 +57,8 @@ model Order {
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
-  items OrderItem[]
+  items    OrderItem[]
+  payments Payment[]
 
   @@index([customerId])
   @@index([status])
@@ -69,4 +79,19 @@ model OrderItem {
   @@index([orderId])
   @@index([productId])
   @@map("order_items")
+}
+
+model Payment {
+  id            String        @id @default(uuid()) @db.Uuid
+  orderId       String        @map("order_id") @db.Uuid
+  amount        Decimal       @db.Decimal(10, 2)
+  status        PaymentStatus @default(PENDING)
+  gatewayTxnId  String?       @map("gateway_txn_id") @db.VarChar(100)
+  failureReason String?       @map("failure_reason") @db.Text
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("payments")
 }

@@ -1,75 +1,61 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import {
-  ORDER_QUEUE,
-  OrderJobs,
-  ProcessOrderJobPayload,
-} from './order.constants.js';
-import { Logger } from '@nestjs/common';
+import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
+import { QUEUES, SAGA_EVENTS } from '../../common/events/saga.events.js';
 import { PrismaService } from '../../core/database/prisma.service.js';
-import { Job } from 'bullmq';
+import { Job, Queue } from 'bullmq';
+import { Logger } from '@nestjs/common';
 import { OrderStatus } from '../../generated/prisma/enums.js';
 
-@Processor(ORDER_QUEUE)
+@Processor(QUEUES.ORDER)
 export class OrderProcessor extends WorkerHost {
   private readonly logger = new Logger(OrderProcessor.name);
-  constructor(private readonly prisma: PrismaService) {
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @InjectQueue(QUEUES.NOTIFICATION) private readonly notificationQueue: Queue,
+  ) {
     super();
   }
 
-  async process(job: Job<ProcessOrderJobPayload, any, string>): Promise<any> {
-    this.logger.log(
-      `[Worker] Started processing job ${job.id} for order ${job.data.orderId}`,
-    );
-
+  async process(job: Job): Promise<any> {
     switch (job.name) {
-      case OrderJobs.PROCESS_ORDER:
-        return this.handleOrderProcess(job.data);
-      default:
-        this.logger.warn(`Unknown job name: ${job.name}`);
+      case SAGA_EVENTS.PAYMENT_SUCCESS:
+        return this.handlePaymentSuccess(job.data);
+      case SAGA_EVENTS.INVENTORY_FAILED:
+      case SAGA_EVENTS.INVENTORY_RELEASED:
+        return this.handleOrderCancellation(job.data);
     }
   }
 
-  private async handleOrderProcess(data: ProcessOrderJobPayload) {
-    const { orderId, items } = data;
+  private async handlePaymentSuccess(data: {
+    orderId: string;
+    paymentId: string;
+  }) {
+    this.logger.log(`[Saga] Confirming Order ${data.orderId}`);
 
-    // Execute fulfillment in background transaction
-    return this.prisma.$transaction(async (tx) => {
-      // 1. Check & deduct inventory
-      for (const item of items) {
-        const product = await tx.product.findUnique({
-          where: { id: item.productId },
-        });
+    const order = await this.prisma.order.update({
+      where: { id: data.orderId },
+      data: { status: OrderStatus.CONFIRMED },
+    });
 
-        if (!product || product.stock < item.quantity) {
-          this.logger.error(
-            `[Worker] Insufficient stock for product ${item.productId}. Cancelling order ${orderId}`,
-          );
+    // Notify customer
+    await this.notificationQueue.add(SAGA_EVENTS.SEND_NOTIFICATION, {
+      orderId: order.id,
+      customerId: order.customerId,
+      status: 'CONFIRMED',
+    });
+  }
 
-          await tx.order.update({
-            where: { id: orderId },
-            data: { status: OrderStatus.CANCELLED },
-          });
+  private async handleOrderCancellation(data: {
+    orderId: string;
+    reason?: string;
+  }) {
+    this.logger.warn(
+      `[Saga] Cancelling Order ${data.orderId}. Reason: ${data.reason || 'Saga compensation'}`,
+    );
 
-          return { success: false, reason: 'OUT_OF_STOCK' };
-        }
-
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: product.stock - item.quantity },
-        });
-      }
-
-      // 2. Simulate payment processing (async background task)
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // 3. Mark order as CONFIRMED
-      const confirmedOrder = await tx.order.update({
-        where: { id: orderId },
-        data: { status: OrderStatus.CONFIRMED },
-      });
-
-      this.logger.log(`[Worker] Order ${orderId} successfully CONFIRMED!`);
-      return { success: true, orderId: confirmedOrder.id };
+    await this.prisma.order.update({
+      where: { id: data.orderId },
+      data: { status: OrderStatus.CANCELLED },
     });
   }
 }
