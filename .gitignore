@@ -1,0 +1,92 @@
+# compiled output
+/dist
+/node_modules
+/build
+
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# OS
+.DS_Store
+
+# Tests
+/coverage
+/.nyc_output
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# dotenv environment variable files
+.env
+.env.development.local
+.env.test.local
+.env.production.local
+.env.local
+
+# Local planning material
+steps/
+
+# Agent instructions and local agent configuration
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+CODEX.md
+**/CODEX.md
+GEMINI.md
+**/GEMINI.md
+.cursorrules
+**/.cursorrules
+.claude/
+**/.claude/
+.opencode/
+**/.opencode/
+.agents/
+**/.agents/
+.cursor/
+**/.cursor/
+.windsurf/
+**/.windsurf/
+.roo/
+**/.roo/
+.junie/
+**/.junie/
+.github/copilot-instructions.md
+**/.github/copilot-instructions.md
+skills-lock.json
+**/skills-lock.json
+/src/generated/prisma
+
+# temp directory
+.temp
+.tmp
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+/src/generated/prisma
