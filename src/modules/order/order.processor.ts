@@ -1,9 +1,19 @@
-import { InjectQueue, Processor, WorkerHost } from '@nestjs/bullmq';
-import { QUEUES, SAGA_EVENTS } from '../../common/events/saga.events.js';
+import { Processor, WorkerHost } from '@nestjs/bullmq';
+import {
+  NotificationProcessedPayload,
+  PaymentSuccessPayload,
+  QUEUES,
+  SAGA_EVENTS,
+} from '../../common/events/saga.events.js';
 import { PrismaService } from '../../core/database/prisma.service.js';
-import { Job, Queue } from 'bullmq';
+import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { OrderStatus } from '../../generated/prisma/enums.js';
+import {
+  EventEnvelopeFactory,
+  IEventEnvelope,
+} from '../../common/events/event-envelope.interface.js';
+import { OutboxService } from '../outbox/outbox.service.js';
 
 @Processor(QUEUES.ORDER)
 export class OrderProcessor extends WorkerHost {
@@ -11,7 +21,7 @@ export class OrderProcessor extends WorkerHost {
 
   constructor(
     private readonly prisma: PrismaService,
-    @InjectQueue(QUEUES.NOTIFICATION) private readonly notificationQueue: Queue,
+    private readonly outboxService: OutboxService,
   ) {
     super();
   }
@@ -26,35 +36,45 @@ export class OrderProcessor extends WorkerHost {
     }
   }
 
-  private async handlePaymentSuccess(data: {
-    orderId: string;
-    paymentId: string;
-  }) {
-    this.logger.log(`[Saga] Confirming Order ${data.orderId}`);
+  private async handlePaymentSuccess(
+    data: IEventEnvelope<PaymentSuccessPayload>,
+  ) {
+    this.logger.log(`[Saga] Confirming Order ${data.payload.orderId}`);
 
-    const order = await this.prisma.order.update({
-      where: { id: data.orderId },
-      data: { status: OrderStatus.CONFIRMED },
-    });
+    await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.update({
+        where: { id: data.payload.orderId },
+        data: { status: OrderStatus.CONFIRMED },
+      });
 
-    // Notify customer
-    await this.notificationQueue.add(SAGA_EVENTS.SEND_NOTIFICATION, {
-      orderId: order.id,
-      customerId: order.customerId,
-      status: 'CONFIRMED',
+      const envelope =
+        EventEnvelopeFactory.create<NotificationProcessedPayload>(
+          'Order',
+          order.id,
+          SAGA_EVENTS.SEND_NOTIFICATION,
+          {
+            orderId: order.id,
+            customerId: order.customerId,
+            status: 'CONFIRMED',
+          },
+          'order-service',
+        );
+      await this.outboxService.appendInTransaction(tx, envelope);
     });
   }
 
   private async handleOrderCancellation(data: {
-    orderId: string;
-    reason?: string;
+    payload: {
+      orderId: string;
+      reason?: string;
+    };
   }) {
     this.logger.warn(
-      `[Saga] Cancelling Order ${data.orderId}. Reason: ${data.reason || 'Saga compensation'}`,
+      `[Saga] Cancelling Order ${data.payload.orderId}. Reason: ${data.payload.reason || 'Saga compensation'}`,
     );
 
     await this.prisma.order.update({
-      where: { id: data.orderId },
+      where: { id: data.payload.orderId },
       data: { status: OrderStatus.CANCELLED },
     });
   }

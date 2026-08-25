@@ -9,7 +9,7 @@ export class NotificationProcessor extends WorkerHost {
 
   async process(job: Job): Promise<any> {
     if (job.name === SAGA_EVENTS.SEND_NOTIFICATION) {
-      const { orderId, customerId, status } = job.data;
+      const { orderId, customerId, status } = job.data.payload;
       this.logger.log(
         `📧 [Notification] Email sent to Customer ${customerId}: Your order ${orderId} is ${status}!`,
       );

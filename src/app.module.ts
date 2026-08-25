@@ -9,15 +9,19 @@ import { BullModule } from '@nestjs/bullmq';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
 import { PaymentModule } from './modules/payment/payment.module.js';
 import { NotificationModule } from './modules/notification/notification.module.js';
+import { OutboxModule } from './modules/outbox/outbox.module.js';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    OutboxModule,
     InventoryModule,
     PaymentModule,
     NotificationModule,
     OrderModule,
     PrismaModule,
     HealthModule,
+    ScheduleModule.forRoot(),
     ConfigModule.forRoot({
       isGlobal: true,
       load: [appConfig, redisConfig],

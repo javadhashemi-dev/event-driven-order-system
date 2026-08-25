@@ -3,14 +3,13 @@ import { PrismaService } from '../../core/database/prisma.service.js';
 import { OrderStatus } from '../../generated/prisma/enums.js';
 import { CreateOrderDto } from './dto/create-order.dto.js';
 import { Decimal } from '@prisma/client/runtime/client';
-import { InjectQueue } from '@nestjs/bullmq';
 
-import { Queue } from 'bullmq';
 import {
   OrderCreatedPayload,
-  QUEUES,
   SAGA_EVENTS,
 } from '../../common/events/saga.events.js';
+import { EventEnvelopeFactory } from '../../common/events/event-envelope.interface.js';
+import { OutboxService } from '../outbox/outbox.service.js';
 
 @Injectable()
 export class OrderService {
@@ -18,7 +17,7 @@ export class OrderService {
 
   constructor(
     private readonly prisma: PrismaService,
-    @InjectQueue(QUEUES.INVENTORY) private readonly inventoryQueue: Queue,
+    private readonly outboxService: OutboxService,
   ) {}
 
   async createOrderSync(dto: CreateOrderDto) {
@@ -52,46 +51,49 @@ export class OrderService {
     }
 
     // 2. Persist initial order in PENDING state
-    const order = await this.prisma.order.create({
-      data: {
-        customerId: dto.customerId,
-        totalAmount,
-        status: OrderStatus.PENDING,
-        items: {
-          create: itemsToCreate,
+
+    const order = await this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.create({
+        data: {
+          customerId: dto.customerId,
+          totalAmount,
+          status: OrderStatus.PENDING,
+          items: {
+            create: itemsToCreate,
+          },
         },
-      },
-      include: {
-        items: true,
-      },
-    });
+        include: {
+          items: true,
+        },
+      });
 
-    // 3. Enqueue background processing job
-    const payload: OrderCreatedPayload = {
-      orderId: order.id,
-      customerId: order.customerId,
-      items: itemsToCreate.map((i) => ({
-        productId: i.productId,
-        quantity: i.quantity,
-        unitPrice: Number(i.unitPrice),
-      })),
-      totalAmount,
-    };
-
-    await this.inventoryQueue.add(SAGA_EVENTS.ORDER_CREATED, payload, {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 1000,
-      },
-      removeOnComplete: false,
+      const envelope = EventEnvelopeFactory.create<OrderCreatedPayload>(
+        'Order',
+        order.id,
+        SAGA_EVENTS.ORDER_CREATED,
+        {
+          orderId: order.id,
+          customerId: order.customerId,
+          items: itemsToCreate.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unitPrice: Number(i.unitPrice),
+          })),
+          totalAmount,
+        },
+        'order-service',
+        {
+          correlationId: crypto.randomUUID(),
+        },
+      );
+      await this.outboxService.appendInTransaction(tx, envelope);
+      return order;
     });
 
     this.logger.log(
       `Order ${order.id} persisted as PENDING and queued for background processing.`,
     );
 
-    // 4. Return immediately to the client
     return {
       orderId: order.id,
       status: order.status,

@@ -1,3 +1,5 @@
+import { OrderStatus } from '../../generated/prisma/enums.js';
+
 export const QUEUES = {
   ORDER: 'order-queue',
   INVENTORY: 'inventory-queue',
@@ -29,6 +31,15 @@ export interface OrderCreatedPayload {
   totalAmount: number;
 }
 
+export interface InventoryFailedPayload {
+  orderId: string;
+  reason: string;
+}
+
+export interface InventoryReleasedPayload {
+  orderId: string;
+}
+
 export interface InventoryReservedPayload {
   orderId: string;
   customerId: string;
@@ -43,4 +54,20 @@ export interface PaymentProcessedPayload {
   amount: number;
   success: boolean;
   reason?: string;
+}
+
+export interface PaymentSuccessPayload {
+  orderId: string;
+  paymentId: string;
+}
+
+export interface PaymentFailedPayload {
+  orderId: string;
+  reason: string;
+}
+
+export interface NotificationProcessedPayload {
+  orderId: string;
+  customerId: string;
+  status: OrderStatus;
 }
