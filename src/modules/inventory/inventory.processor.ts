@@ -9,13 +9,14 @@ import {
 } from '../../common/events/saga.events.js';
 import { PrismaService } from '../../core/database/prisma.service.js';
 import { Job } from 'bullmq';
-import { Logger } from '@nestjs/common';
+import { ConflictException, Logger } from '@nestjs/common';
 import { OrderStatus } from '../../generated/prisma/enums.js';
 import {
   EventEnvelopeFactory,
   IEventEnvelope,
 } from '../../common/events/event-envelope.interface.js';
 import { OutboxService } from '../outbox/outbox.service.js';
+import { Prisma, Product } from '../../generated/prisma/client.js';
 
 @Processor(QUEUES.INVENTORY)
 export class InventoryProcessor extends WorkerHost {
@@ -48,11 +49,13 @@ export class InventoryProcessor extends WorkerHost {
     );
 
     await this.prisma.$transaction(async (tx) => {
+      const products: (Product & { quantity: number })[] = [];
       // Check stock availability
       for (const item of data.payload.items) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },
         });
+        if (product) products.push({ ...product, quantity: item.quantity });
         if (!product || product.stock < item.quantity) {
           const envelope = EventEnvelopeFactory.create<InventoryFailedPayload>(
             'Inventory',
@@ -77,11 +80,9 @@ export class InventoryProcessor extends WorkerHost {
       }
 
       // Deduct stock
-      for (const item of data.payload.items) {
-        await tx.product.update({
-          where: { id: item.productId },
-          data: { stock: { decrement: item.quantity } },
-        });
+
+      for (const p of products) {
+        await this.deductStockWithOCC(tx, p.id, p.quantity, p.version);
       }
 
       await tx.order.update({
@@ -148,5 +149,30 @@ export class InventoryProcessor extends WorkerHost {
     this.logger.log(
       `[Inventory Compensation] Stock restored for Order ${data.payload.orderId}. Notifying Order service.`,
     );
+  }
+
+  private async deductStockWithOCC(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    quantity: number,
+    currentVersion: number,
+  ) {
+    const result = await tx.product.updateMany({
+      where: {
+        id: productId,
+        version: currentVersion,
+        stock: { gte: quantity },
+      },
+      data: {
+        stock: { decrement: quantity },
+        version: { increment: 1 },
+      },
+    });
+
+    if (result.count === 0) {
+      throw new Error(
+        `OCC Conflict: Product ${productId} stock changed by another transaction. Please retry.`,
+      );
+    }
   }
 }

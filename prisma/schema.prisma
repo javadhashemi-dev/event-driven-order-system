@@ -48,6 +48,7 @@ model Product {
   name      String   @db.VarChar(255)
   price     Decimal  @db.Decimal(10, 2)
   stock     Int      @default(0)
+  version   Int      @default(1)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -119,4 +120,13 @@ model OutboxEvent {
   @@index([status, createdAt])
   @@index([aggregateType, aggregateId])
   @@map("outbox_events")
+}
+
+model IdempotencyRecord {
+  key             String   @id @db.VarChar(128)
+  statusCode      Int      @map("status_code")
+  responsePayload Json     @map("response_payload") @db.JsonB
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@map("idempotency_records")
 }
