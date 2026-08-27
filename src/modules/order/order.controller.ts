@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -19,8 +20,11 @@ export class OrderController {
   @UseInterceptors(IdempotencyInterceptor)
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
-  createOrder(@Body() dto: CreateOrderDto) {
-    return this.orderService.createOrderSync(dto);
+  createOrder(
+    @Body() dto: CreateOrderDto,
+    @Headers('x-correlation-id') correlationId: string,
+  ) {
+    return this.orderService.createOrder(dto, correlationId);
   }
 
   @Get(':id')

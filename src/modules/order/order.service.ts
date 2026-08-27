@@ -20,7 +20,7 @@ export class OrderService {
     private readonly outboxService: OutboxService,
   ) {}
 
-  async createOrderSync(dto: CreateOrderDto) {
+  async createOrder(dto: CreateOrderDto, correlationId: string) {
     this.logger.log(`Ingesting order for customer: ${dto.customerId}`);
 
     // 1. Validate items & compute totals
@@ -83,7 +83,7 @@ export class OrderService {
         },
         'order-service',
         {
-          correlationId: crypto.randomUUID(),
+          correlationId: correlationId,
         },
       );
       await this.outboxService.appendInTransaction(tx, envelope);

@@ -1,6 +1,6 @@
 import { OrderModule } from './modules/order/order.module.js';
 import { HealthModule } from './modules/health/health.module.js';
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { appConfig } from './modules/config/app.config.js';
 import { PrismaModule } from './core/database/prisma.module.js';
@@ -14,9 +14,29 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ConsumerDeduplicationModule } from './common/deduplication/consumer-deduplication.module.js';
 import { AdminBullBoardModule } from './modules/admin/bull-board.module.js';
 import { DlqModule } from './modules/dlq/dlq.module.js';
+import { LoggerModule } from 'nestjs-pino';
+import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware.js';
 
 @Module({
   imports: [
+    LoggerModule.forRoot({
+      pinoHttp: {
+        customProps: (req) => ({
+          correlationId: req.headers['x-correlation-id'],
+        }),
+
+        level: process.env.NODE_ENV !== 'production' ? 'debug' : 'info',
+        transport:
+          process.env.NODE_ENV !== 'production'
+            ? {
+                target: 'pino-pretty',
+                options: {
+                  singleLine: true,
+                },
+              }
+            : undefined,
+      },
+    }),
     DlqModule,
     AdminBullBoardModule,
     ConsumerDeduplicationModule,
@@ -56,4 +76,8 @@ import { DlqModule } from './modules/dlq/dlq.module.js';
   controllers: [],
   providers: [],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(CorrelationIdMiddleware).forRoutes('*');
+  }
+}
