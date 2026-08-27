@@ -11,9 +11,11 @@ import { PaymentModule } from './modules/payment/payment.module.js';
 import { NotificationModule } from './modules/notification/notification.module.js';
 import { OutboxModule } from './modules/outbox/outbox.module.js';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ConsumerDeduplicationModule } from './common/deduplication/consumer-deduplication.module.js';
 
 @Module({
   imports: [
+    ConsumerDeduplicationModule,
     OutboxModule,
     InventoryModule,
     PaymentModule,

@@ -15,6 +15,8 @@ import {
   IEventEnvelope,
 } from '../../common/events/event-envelope.interface.js';
 import { OutboxService } from '../outbox/outbox.service.js';
+import { ConsumerDeduplicationService } from '../../common/deduplication/consumer-deduplication.service.js';
+import { Prisma } from '../../generated/prisma/client.js';
 
 @Processor(QUEUES.PAYMENT)
 export class PaymentProcessor extends WorkerHost {
@@ -22,19 +24,40 @@ export class PaymentProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
+    private readonly deduplicationService: ConsumerDeduplicationService,
   ) {
     super();
   }
 
   async process(job: Job): Promise<any> {
-    if (job.name === SAGA_EVENTS.PROCESS_PAYMENT) {
-      return this.handleProcessPayment(
-        job.data as IEventEnvelope<OrderCreatedPayload>,
-      );
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const shouldProcess =
+          await this.deduplicationService.shouldProcessEvent(
+            tx,
+            job.id || job.data.eventId,
+            job.name,
+            'PaymentWorker',
+          );
+
+        if (!shouldProcess) {
+          return { skipped: true, reason: 'DUPLICATE_EVENT' };
+        }
+
+        if (job.name === SAGA_EVENTS.PROCESS_PAYMENT) {
+          return this.handleProcessPayment(
+            tx,
+            job.data as IEventEnvelope<OrderCreatedPayload>,
+          );
+        }
+      });
+    } catch (error: any) {
+      throw error;
     }
   }
 
   private async handleProcessPayment(
+    tx: Prisma.TransactionClient,
     data: IEventEnvelope<OrderCreatedPayload>,
   ) {
     this.logger.log(
@@ -48,63 +71,59 @@ export class PaymentProcessor extends WorkerHost {
     const isPaymentSuccessful = data.payload.customerId !== 'fail_payment';
 
     if (isPaymentSuccessful) {
-      await this.prisma.$transaction(async (tx) => {
-        const payment = await tx.payment.create({
-          data: {
-            orderId: data.payload.orderId,
-            amount: data.payload.totalAmount,
-            status: PaymentStatus.SUCCESS,
-            gatewayTxnId: `txn_${Date.now()}`,
-          },
-        });
-
-        const envelope = EventEnvelopeFactory.create<PaymentSuccessPayload>(
-          'Payment',
-          data.payload.orderId,
-          SAGA_EVENTS.PAYMENT_SUCCESS,
-          {
-            orderId: data.payload.orderId,
-            paymentId: payment.id,
-          },
-          'payment-service',
-          {
-            correlationId: data.metadata.correlationId,
-            causationId: data.eventType,
-          },
-        );
-        await this.outboxService.appendInTransaction(tx, envelope);
+      const payment = await tx.payment.create({
+        data: {
+          orderId: data.payload.orderId,
+          amount: data.payload.totalAmount,
+          status: PaymentStatus.SUCCESS,
+          gatewayTxnId: `txn_${Date.now()}`,
+        },
       });
+
+      const envelope = EventEnvelopeFactory.create<PaymentSuccessPayload>(
+        'Payment',
+        data.payload.orderId,
+        SAGA_EVENTS.PAYMENT_SUCCESS,
+        {
+          orderId: data.payload.orderId,
+          paymentId: payment.id,
+        },
+        'payment-service',
+        {
+          correlationId: data.metadata.correlationId,
+          causationId: data.eventType,
+        },
+      );
+      await this.outboxService.appendInTransaction(tx, envelope);
 
       this.logger.log(
         `[Payment] Payment succeeded for Order ${data.payload.orderId}`,
       );
     } else {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.payment.create({
-          data: {
-            orderId: data.payload.orderId,
-            amount: data.payload.totalAmount,
-            status: PaymentStatus.FAILED,
-            failureReason: 'Card declined / Insufficient customer funds',
-          },
-        });
-
-        const envelope = EventEnvelopeFactory.create<PaymentFailedPayload>(
-          'Payment',
-          data.payload.orderId,
-          SAGA_EVENTS.PAYMENT_FAILED,
-          {
-            orderId: data.payload.orderId,
-            reason: 'Payment declined',
-          },
-          'payment-service',
-          {
-            correlationId: data.metadata.correlationId,
-            causationId: data.eventType,
-          },
-        );
-        await this.outboxService.appendInTransaction(tx, envelope);
+      await tx.payment.create({
+        data: {
+          orderId: data.payload.orderId,
+          amount: data.payload.totalAmount,
+          status: PaymentStatus.FAILED,
+          failureReason: 'Card declined / Insufficient customer funds',
+        },
       });
+
+      const envelope = EventEnvelopeFactory.create<PaymentFailedPayload>(
+        'Payment',
+        data.payload.orderId,
+        SAGA_EVENTS.PAYMENT_FAILED,
+        {
+          orderId: data.payload.orderId,
+          reason: 'Payment declined',
+        },
+        'payment-service',
+        {
+          correlationId: data.metadata.correlationId,
+          causationId: data.eventType,
+        },
+      );
+      await this.outboxService.appendInTransaction(tx, envelope);
 
       this.logger.error(
         `[Payment] Payment FAILED for Order ${data.payload.orderId}. Triggering Saga compensation.`,
