@@ -20,7 +20,7 @@ export class NotificationProcessor extends WorkerHost {
         const shouldProcess =
           await this.deduplicationService.shouldProcessEvent(
             tx,
-            job.id || job.data.eventId,
+            job.data.id,
             job.name,
             'NotificationWorker',
           );

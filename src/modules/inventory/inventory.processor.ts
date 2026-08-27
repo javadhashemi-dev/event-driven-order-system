@@ -34,7 +34,7 @@ export class InventoryProcessor extends WorkerHost {
     await this.prisma.$transaction(async (tx) => {
       const shouldProcess = await this.deduplicationService.shouldProcessEvent(
         tx,
-        job.id || job.data.eventId,
+        job.data.id,
         job.name,
         'InventoryWorker',
       );

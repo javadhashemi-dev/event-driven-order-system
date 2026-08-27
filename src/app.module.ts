@@ -12,9 +12,13 @@ import { NotificationModule } from './modules/notification/notification.module.j
 import { OutboxModule } from './modules/outbox/outbox.module.js';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConsumerDeduplicationModule } from './common/deduplication/consumer-deduplication.module.js';
+import { AdminBullBoardModule } from './modules/admin/bull-board.module.js';
+import { DlqModule } from './modules/dlq/dlq.module.js';
 
 @Module({
   imports: [
+    DlqModule,
+    AdminBullBoardModule,
     ConsumerDeduplicationModule,
     OutboxModule,
     InventoryModule,
@@ -32,6 +36,14 @@ import { ConsumerDeduplicationModule } from './common/deduplication/consumer-ded
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => ({
+        defaultJobOptions: {
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 3000,
+            jitter: 0.5,
+          },
+        },
         connection: {
           host: configService.get<string>('redis.host'),
           port: configService.get<number>('redis.port'),

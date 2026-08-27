@@ -5,6 +5,7 @@ export const QUEUES = {
   INVENTORY: 'inventory-queue',
   PAYMENT: 'payment-queue',
   NOTIFICATION: 'notification-queue',
+  DLQ: 'dead-letter-queue',
 } as const;
 
 export const SAGA_EVENTS = {
