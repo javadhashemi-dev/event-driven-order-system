@@ -18,6 +18,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
   redis:
     image: redis:7-alpine
     container_name: order_system_redis
@@ -32,6 +33,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: order_system_prometheus
+    restart: unless-stopped
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - '9090:9090'
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: order_system_grafana
+    restart: unless-stopped
+    ports:
+      - '3001:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
 
 volumes:
   postgres_data:

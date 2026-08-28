@@ -16,9 +16,16 @@ import { AdminBullBoardModule } from './modules/admin/bull-board.module.js';
 import { DlqModule } from './modules/dlq/dlq.module.js';
 import { LoggerModule } from 'nestjs-pino';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware.js';
+import { PrometheusModule } from '@willsoto/nestjs-prometheus';
 
 @Module({
   imports: [
+    PrometheusModule.register({
+      path: '/metrics',
+      defaultMetrics: {
+        enabled: true,
+      },
+    }),
     LoggerModule.forRoot({
       pinoHttp: {
         customProps: (req) => ({

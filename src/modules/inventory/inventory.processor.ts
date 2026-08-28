@@ -18,6 +18,8 @@ import {
 import { OutboxService } from '../outbox/outbox.service.js';
 import { Prisma, Product } from '../../generated/prisma/client.js';
 import { ConsumerDeduplicationService } from '../../common/deduplication/consumer-deduplication.service.js';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Histogram } from 'prom-client';
 
 @Processor(QUEUES.INVENTORY)
 export class InventoryProcessor extends WorkerHost {
@@ -26,6 +28,8 @@ export class InventoryProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
     private readonly deduplicationService: ConsumerDeduplicationService,
+    @InjectMetric('inventory_reserve_duration_seconds')
+    private readonly inventoryReserveDuration: Histogram<string>,
   ) {
     super();
   }
@@ -64,66 +68,76 @@ export class InventoryProcessor extends WorkerHost {
     tx: Prisma.TransactionClient,
     data: IEventEnvelope<OrderCreatedPayload>,
   ) {
+    const endTimer = this.inventoryReserveDuration.startTimer();
+    let result = 'reserved';
     this.logger.log(
       `[Inventory] Reserving stock for Order ${data.payload.orderId}`,
     );
 
-    const products: (Product & { quantity: number })[] = [];
-    // Check stock availability
-    for (const item of data.payload.items) {
-      const product = await tx.product.findUnique({
-        where: { id: item.productId },
-      });
-      if (product) products.push({ ...product, quantity: item.quantity });
-      if (!product || product.stock < item.quantity) {
-        const envelope = EventEnvelopeFactory.create<InventoryFailedPayload>(
-          'Inventory',
-          data.payload.orderId,
-          SAGA_EVENTS.INVENTORY_FAILED,
-          {
-            orderId: data.payload.orderId,
-            reason: `Insufficient stock for product ${item.productId}`,
-          },
-          'inventory-service',
-          {
-            correlationId: data.metadata.correlationId,
-            causationId: data.eventType,
-          },
-        );
-        await this.outboxService.appendInTransaction(tx, envelope);
-        this.logger.error(
-          `[Inventory] Stock reservation failed for Order ${data.payload.orderId}: Insufficient stock for product ${item.productId}`,
-        );
-        return;
+    try {
+      const products: (Product & { quantity: number })[] = [];
+      // Check stock availability
+      for (const item of data.payload.items) {
+        const product = await tx.product.findUnique({
+          where: { id: item.productId },
+        });
+        if (product) products.push({ ...product, quantity: item.quantity });
+        if (!product || product.stock < item.quantity) {
+          const envelope = EventEnvelopeFactory.create<InventoryFailedPayload>(
+            'Inventory',
+            data.payload.orderId,
+            SAGA_EVENTS.INVENTORY_FAILED,
+            {
+              orderId: data.payload.orderId,
+              reason: `Insufficient stock for product ${item.productId}`,
+            },
+            'inventory-service',
+            {
+              correlationId: data.metadata.correlationId,
+              causationId: data.eventType,
+            },
+          );
+          await this.outboxService.appendInTransaction(tx, envelope);
+          this.logger.error(
+            `[Inventory] Stock reservation failed for Order ${data.payload.orderId}: Insufficient stock for product ${item.productId}`,
+          );
+          result = 'failed';
+          return;
+        }
       }
+
+      // Deduct stock
+
+      for (const p of products) {
+        await this.deductStockWithOCC(tx, p.id, p.quantity, p.version);
+      }
+
+      await tx.order.update({
+        where: { id: data.payload.orderId },
+        data: { status: OrderStatus.INVENTORY_RESERVED },
+      });
+
+      const envelope = EventEnvelopeFactory.create<OrderCreatedPayload>(
+        'Inventory',
+        data.payload.orderId,
+        SAGA_EVENTS.PROCESS_PAYMENT,
+        data.payload,
+        'inventory-service',
+        {
+          correlationId: data.metadata.correlationId,
+          causationId: data.eventType,
+        },
+      );
+      await this.outboxService.appendInTransaction(tx, envelope);
+      this.logger.log(
+        `[Inventory] Stock reserved for Order ${data.payload.orderId}. Forwarding to Payment.`,
+      );
+    } catch (error) {
+      result = 'error';
+      throw error;
+    } finally {
+      endTimer({ result: 'failed' });
     }
-
-    // Deduct stock
-
-    for (const p of products) {
-      await this.deductStockWithOCC(tx, p.id, p.quantity, p.version);
-    }
-
-    await tx.order.update({
-      where: { id: data.payload.orderId },
-      data: { status: OrderStatus.INVENTORY_RESERVED },
-    });
-
-    const envelope = EventEnvelopeFactory.create<OrderCreatedPayload>(
-      'Inventory',
-      data.payload.orderId,
-      SAGA_EVENTS.PROCESS_PAYMENT,
-      data.payload,
-      'inventory-service',
-      {
-        correlationId: data.metadata.correlationId,
-        causationId: data.eventType,
-      },
-    );
-    await this.outboxService.appendInTransaction(tx, envelope);
-    this.logger.log(
-      `[Inventory] Stock reserved for Order ${data.payload.orderId}. Forwarding to Payment.`,
-    );
   }
 
   private async handleReleaseStock(

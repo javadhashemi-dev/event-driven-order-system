@@ -10,6 +10,8 @@ import {
 } from '../../common/events/saga.events.js';
 import { EventEnvelopeFactory } from '../../common/events/event-envelope.interface.js';
 import { OutboxService } from '../outbox/outbox.service.js';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Counter } from 'prom-client';
 
 @Injectable()
 export class OrderService {
@@ -18,6 +20,8 @@ export class OrderService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
+    @InjectMetric('orders_total')
+    private readonly ordersCounter: Counter<string>,
   ) {}
 
   async createOrder(dto: CreateOrderDto, correlationId: string) {
@@ -38,6 +42,7 @@ export class OrderService {
       });
 
       if (!product) {
+        this.ordersCounter.inc({ status: 'failed' });
         throw new NotFoundException(`Product ${item.productId} not found`);
       }
       const itemTotal = Number(product.price) * item.quantity;
@@ -87,6 +92,7 @@ export class OrderService {
         },
       );
       await this.outboxService.appendInTransaction(tx, envelope);
+      this.ordersCounter.inc({ status: 'created' });
       return order;
     });
 

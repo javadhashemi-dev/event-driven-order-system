@@ -17,6 +17,8 @@ import {
 import { OutboxService } from '../outbox/outbox.service.js';
 import { ConsumerDeduplicationService } from '../../common/deduplication/consumer-deduplication.service.js';
 import { Prisma } from '../../generated/prisma/client.js';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Histogram } from 'prom-client';
 
 @Processor(QUEUES.PAYMENT)
 export class PaymentProcessor extends WorkerHost {
@@ -25,6 +27,8 @@ export class PaymentProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
     private readonly deduplicationService: ConsumerDeduplicationService,
+    @InjectMetric('payment_duration_seconds')
+    private readonly paymentDuration: Histogram<string>,
   ) {
     super();
   }
@@ -60,74 +64,83 @@ export class PaymentProcessor extends WorkerHost {
     tx: Prisma.TransactionClient,
     data: IEventEnvelope<OrderCreatedPayload>,
   ) {
+    const endTimer = this.paymentDuration.startTimer();
+    let result = 'success';
+
     this.logger.log(
       `[Payment] Processing $${data.payload.totalAmount} for Order ${data.payload.orderId}`,
     );
+    try {
+      // Simulate network delay
+      await new Promise((r) => setTimeout(r, 3000));
 
-    // Simulate network delay
-    await new Promise((r) => setTimeout(r, 3000));
+      // Test helper: If customerId is 'fail_payment', simulate card decline!
+      const isPaymentSuccessful = data.payload.customerId !== 'fail_payment';
 
-    // Test helper: If customerId is 'fail_payment', simulate card decline!
-    const isPaymentSuccessful = data.payload.customerId !== 'fail_payment';
+      if (isPaymentSuccessful) {
+        const payment = await tx.payment.create({
+          data: {
+            orderId: data.payload.orderId,
+            amount: data.payload.totalAmount,
+            status: PaymentStatus.SUCCESS,
+            gatewayTxnId: `txn_${Date.now()}`,
+          },
+        });
 
-    if (isPaymentSuccessful) {
-      const payment = await tx.payment.create({
-        data: {
-          orderId: data.payload.orderId,
-          amount: data.payload.totalAmount,
-          status: PaymentStatus.SUCCESS,
-          gatewayTxnId: `txn_${Date.now()}`,
-        },
-      });
+        const envelope = EventEnvelopeFactory.create<PaymentSuccessPayload>(
+          'Payment',
+          data.payload.orderId,
+          SAGA_EVENTS.PAYMENT_SUCCESS,
+          {
+            orderId: data.payload.orderId,
+            paymentId: payment.id,
+          },
+          'payment-service',
+          {
+            correlationId: data.metadata.correlationId,
+            causationId: data.eventType,
+          },
+        );
+        await this.outboxService.appendInTransaction(tx, envelope);
 
-      const envelope = EventEnvelopeFactory.create<PaymentSuccessPayload>(
-        'Payment',
-        data.payload.orderId,
-        SAGA_EVENTS.PAYMENT_SUCCESS,
-        {
-          orderId: data.payload.orderId,
-          paymentId: payment.id,
-        },
-        'payment-service',
-        {
-          correlationId: data.metadata.correlationId,
-          causationId: data.eventType,
-        },
-      );
-      await this.outboxService.appendInTransaction(tx, envelope);
+        this.logger.log(
+          `[Payment] Payment succeeded for Order ${data.payload.orderId}`,
+        );
+      } else {
+        await tx.payment.create({
+          data: {
+            orderId: data.payload.orderId,
+            amount: data.payload.totalAmount,
+            status: PaymentStatus.FAILED,
+            failureReason: 'Card declined / Insufficient customer funds',
+          },
+        });
 
-      this.logger.log(
-        `[Payment] Payment succeeded for Order ${data.payload.orderId}`,
-      );
-    } else {
-      await tx.payment.create({
-        data: {
-          orderId: data.payload.orderId,
-          amount: data.payload.totalAmount,
-          status: PaymentStatus.FAILED,
-          failureReason: 'Card declined / Insufficient customer funds',
-        },
-      });
-
-      const envelope = EventEnvelopeFactory.create<PaymentFailedPayload>(
-        'Payment',
-        data.payload.orderId,
-        SAGA_EVENTS.PAYMENT_FAILED,
-        {
-          orderId: data.payload.orderId,
-          reason: 'Payment declined',
-        },
-        'payment-service',
-        {
-          correlationId: data.metadata.correlationId,
-          causationId: data.eventType,
-        },
-      );
-      await this.outboxService.appendInTransaction(tx, envelope);
-
-      this.logger.error(
-        `[Payment] Payment FAILED for Order ${data.payload.orderId}. Triggering Saga compensation.`,
-      );
+        const envelope = EventEnvelopeFactory.create<PaymentFailedPayload>(
+          'Payment',
+          data.payload.orderId,
+          SAGA_EVENTS.PAYMENT_FAILED,
+          {
+            orderId: data.payload.orderId,
+            reason: 'Payment declined',
+          },
+          'payment-service',
+          {
+            correlationId: data.metadata.correlationId,
+            causationId: data.eventType,
+          },
+        );
+        await this.outboxService.appendInTransaction(tx, envelope);
+        result = 'failed';
+        this.logger.error(
+          `[Payment] Payment FAILED for Order ${data.payload.orderId}. Triggering Saga compensation.`,
+        );
+      }
+    } catch (error) {
+      result = 'error';
+      throw error;
+    } finally {
+      endTimer({ result });
     }
   }
 }

@@ -16,6 +16,8 @@ import {
 import { OutboxService } from '../outbox/outbox.service.js';
 import { ConsumerDeduplicationService } from '../../common/deduplication/consumer-deduplication.service.js';
 import { Prisma } from '../../generated/prisma/client.js';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Counter, Histogram } from 'prom-client';
 
 @Processor(QUEUES.ORDER)
 export class OrderProcessor extends WorkerHost {
@@ -25,6 +27,10 @@ export class OrderProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
     private readonly deduplicationService: ConsumerDeduplicationService,
+    @InjectMetric('saga_duration_seconds')
+    private readonly sagaDuration: Histogram<string>,
+    @InjectMetric('orders_total')
+    private readonly ordersCounter: Counter<string>,
   ) {
     super();
   }
@@ -67,6 +73,12 @@ export class OrderProcessor extends WorkerHost {
       where: { id: data.payload.orderId },
       data: { status: OrderStatus.CONFIRMED },
     });
+    this.sagaDuration.observe(
+      {
+        result: 'confirmed',
+      },
+      (Date.now() - order.createdAt.getTime()) / 1000,
+    );
 
     const envelope = EventEnvelopeFactory.create<NotificationProcessedPayload>(
       'Order',
@@ -95,9 +107,16 @@ export class OrderProcessor extends WorkerHost {
       `[Saga] Cancelling Order ${data.payload.orderId}. Reason: ${data.payload.reason || 'Saga compensation'}`,
     );
 
-    await tx.order.update({
+    const order = await tx.order.update({
       where: { id: data.payload.orderId },
       data: { status: OrderStatus.CANCELLED },
     });
+    this.sagaDuration.observe(
+      {
+        result: 'cancelled',
+      },
+      (Date.now() - order.createdAt.getTime()) / 1000,
+    );
+    this.ordersCounter.inc({ status: 'cancelled' });
   }
 }

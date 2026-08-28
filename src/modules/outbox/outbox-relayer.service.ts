@@ -5,6 +5,8 @@ import { QUEUES, SAGA_EVENTS } from '../../common/events/saga.events.js';
 import { Queue } from 'bullmq';
 import { Interval } from '@nestjs/schedule';
 import { OutboxStatus } from '../../generated/prisma/enums.js';
+import { InjectMetric } from '@willsoto/nestjs-prometheus';
+import { Histogram } from 'prom-client';
 
 @Injectable()
 export class OutboxRelayerService {
@@ -17,6 +19,8 @@ export class OutboxRelayerService {
     @InjectQueue(QUEUES.PAYMENT) private readonly paymentQueue: Queue,
     @InjectQueue(QUEUES.ORDER) private readonly orderQueue: Queue,
     @InjectQueue(QUEUES.NOTIFICATION) private readonly notificationQueue: Queue,
+    @InjectMetric('outbox_relay_latency_seconds')
+    private readonly outboxRelayLatency: Histogram<string>,
   ) {}
 
   @Interval(250)
@@ -68,7 +72,7 @@ export class OutboxRelayerService {
         try {
           const publishResult = await this.routeAndPublish(event);
           // 2. Mark as PUBLISHED upon broker acknowledgment
-          await this.prisma.outboxEvent.update({
+          const updatedEvent = await this.prisma.outboxEvent.update({
             where: { id: event.id },
             data: {
               status: publishResult
@@ -77,11 +81,15 @@ export class OutboxRelayerService {
               publishedAt: new Date(),
             },
           });
+          this.outboxRelayLatency.observe(
+            { result: publishResult ? 'published' : 'failed' },
+            (Date.now() - updatedEvent.createdAt.getTime()) / 1000,
+          );
         } catch (error: any) {
           this.logger.error(
             `Failed to publish outbox event ${event.id}: ${error.message}`,
           );
-          await this.prisma.outboxEvent.update({
+          const updatedEvent = await this.prisma.outboxEvent.update({
             where: { id: event.id },
             data: {
               status:
@@ -92,6 +100,10 @@ export class OutboxRelayerService {
               errorMessage: error.message,
             },
           });
+          this.outboxRelayLatency.observe(
+            { result: 'error' },
+            (Date.now() - updatedEvent.createdAt.getTime()) / 1000,
+          );
         }
       }
     } finally {
