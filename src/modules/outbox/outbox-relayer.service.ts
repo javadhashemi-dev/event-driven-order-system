@@ -7,6 +7,8 @@ import { Interval } from '@nestjs/schedule';
 import { OutboxStatus } from '../../generated/prisma/enums.js';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { Histogram } from 'prom-client';
+import { SpanKind } from '@opentelemetry/api';
+import { TracingService } from '../../common/tracing/tracing.module.js';
 
 @Injectable()
 export class OutboxRelayerService {
@@ -15,6 +17,7 @@ export class OutboxRelayerService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly tracing: TracingService,
     @InjectQueue(QUEUES.INVENTORY) private readonly inventoryQueue: Queue,
     @InjectQueue(QUEUES.PAYMENT) private readonly paymentQueue: Queue,
     @InjectQueue(QUEUES.ORDER) private readonly orderQueue: Queue,
@@ -69,8 +72,32 @@ export class OutboxRelayerService {
       this.logger.log(`Relaying ${pendingEvents.length} outbox event(s)...`);
 
       for (const event of pendingEvents) {
+        const metadata = event.metadata as { correlationId?: string } | null;
         try {
-          const publishResult = await this.routeAndPublish(event);
+          const publishResult = await this.tracing.withSpan(
+            `outbox.publish ${event.eventType}`,
+            {
+              kind: SpanKind.PRODUCER,
+              attributes: {
+                'messaging.system': 'bullmq',
+                'outbox.event_id': event.id,
+                'outbox.event_type': event.eventType,
+                'outbox.aggregate_type': event.aggregateType,
+                'outbox.aggregate_id': event.aggregateId,
+                'outbox.retry_count': event.retryCount,
+                'correlation.id': metadata?.correlationId,
+              },
+              // Continue the trace started when the event was created.
+              parentCarrier: metadata,
+            },
+            async (span) => {
+              // Re-stamp the envelope so the consumer continues this publish span.
+              this.tracing.injectContext(metadata);
+              const published = await this.routeAndPublish(event);
+              span.setAttribute('outbox.published', published);
+              return published;
+            },
+          );
           // 2. Mark as PUBLISHED upon broker acknowledgment
           const updatedEvent = await this.prisma.outboxEvent.update({
             where: { id: event.id },

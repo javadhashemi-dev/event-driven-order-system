@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,6 +31,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: order_system_jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - '16686:16686' # Jaeger UI
+      - '14317:4317' # OTLP gRPC
+      - '14318:4318' # OTLP HTTP
+      - '14268:14268' # Jaeger Thrift HTTP (optional)
 
   prometheus:
     image: prom/prometheus:v2.49.1

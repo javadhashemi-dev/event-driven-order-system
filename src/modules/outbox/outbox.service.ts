@@ -14,7 +14,7 @@ export class OutboxService {
         aggregateType: envelope.aggregateType,
         aggregateId: envelope.aggregateId,
         eventType: envelope.eventType,
-        payload: envelope.payload as any,
+        payload: envelope.payload,
         metadata: envelope.metadata as any,
         status: OutboxStatus.PENDING,
       },

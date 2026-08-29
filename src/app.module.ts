@@ -17,6 +17,7 @@ import { DlqModule } from './modules/dlq/dlq.module.js';
 import { LoggerModule } from 'nestjs-pino';
 import { CorrelationIdMiddleware } from './common/middleware/correlation-id.middleware.js';
 import { PrometheusModule } from '@willsoto/nestjs-prometheus';
+import { TracingModule } from './common/tracing/tracing.module.js';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { PrometheusModule } from '@willsoto/nestjs-prometheus';
     }),
     DlqModule,
     AdminBullBoardModule,
+    TracingModule,
     ConsumerDeduplicationModule,
     OutboxModule,
     InventoryModule,

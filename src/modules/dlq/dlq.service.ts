@@ -57,7 +57,7 @@ export class DlqService implements OnModuleInit {
 
   private async attachQueueEventListeners(queue: Queue, queueName: string) {
     const queueEvents = new QueueEvents(queue.name, {
-      connection: queue.opts?.connection as any,
+      connection: queue.opts?.connection,
     });
 
     queueEvents.on('failed', async ({ jobId, failedReason }) => {

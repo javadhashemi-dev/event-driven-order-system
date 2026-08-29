@@ -19,6 +19,8 @@ import { ConsumerDeduplicationService } from '../../common/deduplication/consume
 import { Prisma } from '../../generated/prisma/client.js';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { Histogram } from 'prom-client';
+import { SpanKind } from '@opentelemetry/api';
+import { TracingService } from '../../common/tracing/tracing.module.js';
 
 @Processor(QUEUES.PAYMENT)
 export class PaymentProcessor extends WorkerHost {
@@ -27,6 +29,7 @@ export class PaymentProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
     private readonly deduplicationService: ConsumerDeduplicationService,
+    private readonly tracing: TracingService,
     @InjectMetric('payment_duration_seconds')
     private readonly paymentDuration: Histogram<string>,
   ) {
@@ -34,30 +37,46 @@ export class PaymentProcessor extends WorkerHost {
   }
 
   async process(job: Job): Promise<any> {
-    try {
-      await this.prisma.$transaction(async (tx) => {
-        const shouldProcess =
-          await this.deduplicationService.shouldProcessEvent(
-            tx,
-            job.data.id,
-            job.name,
-            'PaymentWorker',
-          );
+    const envelope = job.data as IEventEnvelope;
+    return this.tracing.withSpan(
+      `saga.process ${job.name}`,
+      {
+        kind: SpanKind.CONSUMER,
+        attributes: {
+          'messaging.system': 'bullmq',
+          'messaging.destination.name': QUEUES.PAYMENT,
+          'messaging.message.id': String(job.id),
+          'messaging.message.retry.count': job.attemptsMade,
+          'saga.event': job.name,
+          'correlation.id': envelope?.metadata?.correlationId,
+        },
+        // Continue the trace from the outbox publish span.
+        parentCarrier: envelope?.metadata,
+      },
+      async (span) => {
+        await this.prisma.$transaction(async (tx) => {
+          const shouldProcess =
+            await this.deduplicationService.shouldProcessEvent(
+              tx,
+              envelope.id,
+              job.name,
+              'PaymentWorker',
+            );
 
-        if (!shouldProcess) {
-          return { skipped: true, reason: 'DUPLICATE_EVENT' };
-        }
+          if (!shouldProcess) {
+            span.setAttribute('saga.duplicate', true);
+            return { skipped: true, reason: 'DUPLICATE_EVENT' };
+          }
 
-        if (job.name === SAGA_EVENTS.PROCESS_PAYMENT) {
-          return this.handleProcessPayment(
-            tx,
-            job.data as IEventEnvelope<OrderCreatedPayload>,
-          );
-        }
-      });
-    } catch (error: any) {
-      throw error;
-    }
+          if (job.name === SAGA_EVENTS.PROCESS_PAYMENT) {
+            return this.handleProcessPayment(
+              tx,
+              envelope as IEventEnvelope<OrderCreatedPayload>,
+            );
+          }
+        });
+      },
+    );
   }
 
   private async handleProcessPayment(

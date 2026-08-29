@@ -20,6 +20,8 @@ import { Prisma, Product } from '../../generated/prisma/client.js';
 import { ConsumerDeduplicationService } from '../../common/deduplication/consumer-deduplication.service.js';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { Histogram } from 'prom-client';
+import { SpanKind } from '@opentelemetry/api';
+import { TracingService } from '../../common/tracing/tracing.module.js';
 
 @Processor(QUEUES.INVENTORY)
 export class InventoryProcessor extends WorkerHost {
@@ -28,6 +30,7 @@ export class InventoryProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly outboxService: OutboxService,
     private readonly deduplicationService: ConsumerDeduplicationService,
+    private readonly tracing: TracingService,
     @InjectMetric('inventory_reserve_duration_seconds')
     private readonly inventoryReserveDuration: Histogram<string>,
   ) {
@@ -35,33 +38,54 @@ export class InventoryProcessor extends WorkerHost {
   }
 
   async process(job: Job): Promise<any> {
-    await this.prisma.$transaction(async (tx) => {
-      const shouldProcess = await this.deduplicationService.shouldProcessEvent(
-        tx,
-        job.data.id,
-        job.name,
-        'InventoryWorker',
-      );
+    const envelope = job.data as IEventEnvelope;
+    return this.tracing.withSpan(
+      `saga.process ${job.name}`,
+      {
+        kind: SpanKind.CONSUMER,
+        attributes: {
+          'messaging.system': 'bullmq',
+          'messaging.destination.name': QUEUES.INVENTORY,
+          'messaging.message.id': String(job.id),
+          'messaging.message.retry.count': job.attemptsMade,
+          'saga.event': job.name,
+          'correlation.id': envelope?.metadata?.correlationId,
+        },
+        // Continue the trace from the outbox publish span.
+        parentCarrier: envelope?.metadata,
+      },
+      async (span) => {
+        await this.prisma.$transaction(async (tx) => {
+          const shouldProcess =
+            await this.deduplicationService.shouldProcessEvent(
+              tx,
+              envelope.id,
+              job.name,
+              'InventoryWorker',
+            );
 
-      if (!shouldProcess) {
-        return { skipped: true, reason: 'DUPLICATE_EVENT' };
-      }
+          if (!shouldProcess) {
+            span.setAttribute('saga.duplicate', true);
+            return { skipped: true, reason: 'DUPLICATE_EVENT' };
+          }
 
-      switch (job.name) {
-        case SAGA_EVENTS.ORDER_CREATED:
-          return this.handleReserveStock(
-            tx,
-            job.data as IEventEnvelope<OrderCreatedPayload>,
-          );
-        case SAGA_EVENTS.PAYMENT_FAILED:
-          return this.handleReleaseStock(
-            tx,
-            job.data as IEventEnvelope<PaymentProcessedPayload>,
-          );
-        default:
-          this.logger.warn(`Unknown job name: ${job.name}`);
-      }
-    });
+          switch (job.name) {
+            case SAGA_EVENTS.ORDER_CREATED:
+              return this.handleReserveStock(
+                tx,
+                envelope as IEventEnvelope<OrderCreatedPayload>,
+              );
+            case SAGA_EVENTS.PAYMENT_FAILED:
+              return this.handleReleaseStock(
+                tx,
+                envelope as IEventEnvelope<PaymentProcessedPayload>,
+              );
+            default:
+              this.logger.warn(`Unknown job name: ${job.name}`);
+          }
+        });
+      },
+    );
   }
 
   private async handleReserveStock(
@@ -136,7 +160,7 @@ export class InventoryProcessor extends WorkerHost {
       result = 'error';
       throw error;
     } finally {
-      endTimer({ result: 'failed' });
+      endTimer({ result });
     }
   }
 

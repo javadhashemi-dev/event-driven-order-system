@@ -1,3 +1,6 @@
+// Must be the first import so instrumentation hooks are registered
+// before Redis/PG/Express are loaded.
+import './otel.js';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';

@@ -1,6 +1,11 @@
+import { context, propagation } from '@opentelemetry/api';
+
 export interface EventMetadata {
   correlationId?: string;
   causationId?: string;
+  /** W3C trace context of the span producing this event (set automatically). */
+  traceparent?: string;
+  tracestate?: string;
   source: string;
   timestamp: string;
   version: number;
@@ -24,18 +29,23 @@ export class EventEnvelopeFactory {
     source: string,
     metadata?: Partial<EventMetadata>,
   ): IEventEnvelope<T> {
+    const envelopeMetadata: EventMetadata = {
+      source,
+      timestamp: new Date().toISOString(),
+      version: 1,
+      ...metadata,
+    };
+
+    // Carry the producing span's trace context so consumers can continue it.
+    propagation.inject(context.active(), envelopeMetadata);
+
     return {
       id: crypto.randomUUID(),
       aggregateType,
       aggregateId,
       eventType,
       payload,
-      metadata: {
-        source,
-        timestamp: new Date().toISOString(),
-        version: 1,
-        ...metadata,
-      },
+      metadata: envelopeMetadata,
     };
   }
 }
