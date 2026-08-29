@@ -20,8 +20,11 @@ export class ConsumerDeduplicationService {
         },
       });
       return true;
-    } catch (error: any) {
-      if (error.code === 'P2002') {
+    } catch (error: unknown) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
         this.logger.warn(
           `Duplicate event ${eventId} received by ${consumer}. Safely skipping.`,
         );

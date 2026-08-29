@@ -4,6 +4,10 @@ import { PrismaService } from '../../src/core/database/prisma.service.js';
 import { OutboxRelayerService } from '../../src/modules/outbox/outbox-relayer.service.js';
 import { QUEUES } from '../../src/common/events/saga.events.js';
 import { getQueueToken } from '@nestjs/bullmq';
+import { TracingService } from '../../src/common/tracing/tracing.module.js';
+
+const RELAY_LATENCY_METRIC_TOKEN = 'PROM_METRIC_OUTBOX_RELAY_LATENCY_SECONDS';
+const mockRelayLatencyMetric = { observe: jest.fn() };
 
 describe('OutboxRelayerService (Integration)', () => {
   let prisma: PrismaService;
@@ -15,6 +19,7 @@ describe('OutboxRelayerService (Integration)', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         PrismaService,
+        TracingService,
         OutboxRelayerService,
         {
           provide: getQueueToken(QUEUES.INVENTORY),
@@ -23,6 +28,10 @@ describe('OutboxRelayerService (Integration)', () => {
         { provide: getQueueToken(QUEUES.PAYMENT), useValue: silentQueue },
         { provide: getQueueToken(QUEUES.ORDER), useValue: silentQueue },
         { provide: getQueueToken(QUEUES.NOTIFICATION), useValue: silentQueue },
+        {
+          provide: RELAY_LATENCY_METRIC_TOKEN,
+          useValue: mockRelayLatencyMetric,
+        },
       ],
     }).compile();
 
@@ -75,11 +84,16 @@ describe('OutboxRelayerService (Integration)', () => {
     const moduleRef = await Test.createTestingModule({
       providers: [
         PrismaService,
+        TracingService,
         OutboxRelayerService,
         { provide: getQueueToken(QUEUES.INVENTORY), useValue: failingQueue },
         { provide: getQueueToken(QUEUES.PAYMENT), useValue: silentQueue },
         { provide: getQueueToken(QUEUES.ORDER), useValue: silentQueue },
         { provide: getQueueToken(QUEUES.NOTIFICATION), useValue: silentQueue },
+        {
+          provide: RELAY_LATENCY_METRIC_TOKEN,
+          useValue: mockRelayLatencyMetric,
+        },
       ],
     }).compile();
     const localRelayer = moduleRef.get(OutboxRelayerService);

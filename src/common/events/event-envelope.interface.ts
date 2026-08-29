@@ -1,6 +1,6 @@
 import { context, propagation } from '@opentelemetry/api';
 
-export interface EventMetadata {
+export type EventMetadata = {
   correlationId?: string;
   causationId?: string;
   /** W3C trace context of the span producing this event (set automatically). */
@@ -9,7 +9,7 @@ export interface EventMetadata {
   source: string;
   timestamp: string;
   version: number;
-}
+};
 
 export interface IEventEnvelope<T = any> {
   id: string; // Deterministic event UUID

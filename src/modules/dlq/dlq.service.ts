@@ -13,7 +13,7 @@ export interface DeadLetterJobData {
   originalQueue: string;
   originalJobId: string | undefined;
   jobName: string;
-  data: any;
+  data: unknown;
   failedReason: string;
   stack?: string;
   failedAt: string;
@@ -42,7 +42,7 @@ export class DlqService implements OnModuleInit {
     };
   }
 
-  async onModuleInit() {
+  onModuleInit() {
     const queues = [
       { queue: this.orderQueue, name: QUEUES.ORDER },
       { queue: this.inventoryQueue, name: QUEUES.INVENTORY },
@@ -51,57 +51,67 @@ export class DlqService implements OnModuleInit {
     ];
 
     for (const { queue, name } of queues) {
-      await this.attachQueueEventListeners(queue, name);
+      this.attachQueueEventListeners(queue, name);
     }
   }
 
-  private async attachQueueEventListeners(queue: Queue, queueName: string) {
+  private attachQueueEventListeners(queue: Queue, queueName: string) {
     const queueEvents = new QueueEvents(queue.name, {
       connection: queue.opts?.connection,
     });
 
-    queueEvents.on('failed', async ({ jobId, failedReason }) => {
-      try {
-        const job = await queue.getJob(jobId);
-        if (!job) {
-          this.logger.warn(`Job ${jobId} not found in ${queueName}`);
-          return;
-        }
-
-        const maxAttempts = job.opts.attempts || 3;
-
-        if (job.attemptsMade >= maxAttempts) {
-          this.logger.warn(
-            `Job ${jobId} from ${queueName} exhausted all ${maxAttempts} attempts | reason: ${failedReason}. Moving to DLQ...`,
-          );
-
-          const dlqData: DeadLetterJobData = {
-            originalQueue: queueName,
-            originalJobId: job.id,
-            jobName: job.name,
-            data: job.data,
-            failedReason: failedReason || 'Unknown error',
-            stack: job.stacktrace?.join('\n'),
-            failedAt: new Date().toISOString(),
-            attemptsMade: job.attemptsMade,
-            maxAttempts,
-          };
-
-          await this.dlqQueue.add('dead-letter-job', dlqData, {
-            jobId: `dlq-${queueName}-${job.id}-${Date.now()}`,
-          });
-
-          this.logger.log(`Job ${jobId} moved to DLQ successfully`);
-        }
-      } catch (error: any) {
-        this.logger.error(
-          `Error handling failed job ${jobId} from ${queueName}: ${error.message}`,
-        );
-      }
+    queueEvents.on('failed', ({ jobId, failedReason }) => {
+      void this.handleFailedJob(queue, queueName, jobId, failedReason);
     });
 
     this.queueEvents.push(queueEvents);
     this.logger.log(`DLQ listener attached to ${queueName}`);
+  }
+
+  private async handleFailedJob(
+    queue: Queue,
+    queueName: string,
+    jobId: string,
+    failedReason: string,
+  ): Promise<void> {
+    try {
+      const job = await queue.getJob(jobId);
+      if (!job) {
+        this.logger.warn(`Job ${jobId} not found in ${queueName}`);
+        return;
+      }
+
+      const maxAttempts = job.opts.attempts || 3;
+
+      if (job.attemptsMade >= maxAttempts) {
+        this.logger.warn(
+          `Job ${jobId} from ${queueName} exhausted all ${maxAttempts} attempts | reason: ${failedReason}. Moving to DLQ...`,
+        );
+
+        const dlqData: DeadLetterJobData = {
+          originalQueue: queueName,
+          originalJobId: job.id,
+          jobName: job.name,
+          data: job.data,
+          failedReason: failedReason || 'Unknown error',
+          stack: job.stacktrace?.join('\n'),
+          failedAt: new Date().toISOString(),
+          attemptsMade: job.attemptsMade,
+          maxAttempts,
+        };
+
+        await this.dlqQueue.add('dead-letter-job', dlqData, {
+          jobId: `dlq-${queueName}-${job.id}-${Date.now()}`,
+        });
+
+        this.logger.log(`Job ${jobId} moved to DLQ successfully`);
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Error handling failed job ${jobId} from ${queueName}: ${message}`,
+      );
+    }
   }
 
   async replay(dlqJobId: string) {
@@ -141,8 +151,7 @@ export class DlqService implements OnModuleInit {
   listFailedJobs() {
     return this.dlqQueue.getJobs(['completed', 'failed', 'waiting']);
   }
-  onModuleDestroy() {
-    // Cleanup event listeners
-    this.queueEvents.forEach((events) => events.close());
+  async onModuleDestroy() {
+    await Promise.all(this.queueEvents.map((events) => events.close()));
   }
 }

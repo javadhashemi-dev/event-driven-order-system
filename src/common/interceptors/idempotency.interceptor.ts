@@ -11,6 +11,8 @@ import { Observable, of } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { PrismaService } from '../../core/database/prisma.service.js';
 import { ConfigService } from '@nestjs/config';
+import { Request, Response } from 'express';
+import { Prisma } from '../../generated/prisma/client.js';
 
 @Injectable()
 export class IdempotencyInterceptor implements NestInterceptor {
@@ -31,9 +33,9 @@ export class IdempotencyInterceptor implements NestInterceptor {
   async intercept(
     context: ExecutionContext,
     next: CallHandler,
-  ): Promise<Observable<any>> {
-    const request = context.switchToHttp().getRequest();
-    const response = context.switchToHttp().getResponse();
+  ): Promise<Observable<unknown>> {
+    const request = context.switchToHttp().getRequest<Request>();
+    const response = context.switchToHttp().getResponse<Response>();
     const idempotencyKey = request.headers['idempotency-key'] as string;
 
     // If no header is supplied, bypass idempotency check
@@ -68,24 +70,36 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     return next.handle().pipe(
-      tap(async (responseData) => {
-        try {
-          // 3. Cache successful response in PostgreSQL
-          await this.prisma.idempotencyRecord.create({
-            data: {
-              key: idempotencyKey,
-              statusCode: response.statusCode || 201,
-              responsePayload: responseData,
-            },
-          });
-        } catch (err: any) {
-          this.logger.error(
-            `Failed to save idempotency record: ${err.message}`,
-          );
-        } finally {
-          await this.redisClient.del(lockKey);
-        }
+      tap((responseData: Prisma.InputJsonValue) => {
+        void this.cacheResponse(
+          idempotencyKey,
+          response.statusCode || 201,
+          responseData,
+          lockKey,
+        );
       }),
     );
+  }
+
+  private async cacheResponse(
+    idempotencyKey: string,
+    statusCode: number,
+    responseData: Prisma.InputJsonValue,
+    lockKey: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.idempotencyRecord.create({
+        data: {
+          key: idempotencyKey,
+          statusCode,
+          responsePayload: responseData,
+        },
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Failed to save idempotency record: ${message}`);
+    } finally {
+      await this.redisClient.del(lockKey);
+    }
   }
 }

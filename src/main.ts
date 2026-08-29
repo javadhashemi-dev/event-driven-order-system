@@ -30,4 +30,4 @@ async function bootstrap() {
   console.log(`App is runing on port: ${port}`);
 }
 
-bootstrap();
+void bootstrap();

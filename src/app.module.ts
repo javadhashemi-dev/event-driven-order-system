@@ -64,7 +64,7 @@ import { TracingModule } from './common/tracing/tracing.module.js';
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
+      useFactory: (configService: ConfigService) => ({
         defaultJobOptions: {
           attempts: 3,
           backoff: {

@@ -14,8 +14,8 @@ export class OutboxService {
         aggregateType: envelope.aggregateType,
         aggregateId: envelope.aggregateId,
         eventType: envelope.eventType,
-        payload: envelope.payload,
-        metadata: envelope.metadata as any,
+        payload: envelope.payload as Prisma.InputJsonValue,
+        metadata: envelope.metadata,
         status: OutboxStatus.PENDING,
       },
     });

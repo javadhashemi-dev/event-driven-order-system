@@ -10,6 +10,16 @@ import { Histogram } from 'prom-client';
 import { SpanKind } from '@opentelemetry/api';
 import { TracingService } from '../../common/tracing/tracing.module.js';
 
+interface PendingOutboxEvent {
+  id: string;
+  aggregateType: string;
+  aggregateId: string;
+  eventType: string;
+  payload: unknown;
+  metadata: unknown;
+  retryCount: number;
+}
+
 @Injectable()
 export class OutboxRelayerService {
   private readonly logger = new Logger(OutboxRelayerService.name);
@@ -34,17 +44,7 @@ export class OutboxRelayerService {
       // 1. Fetch pending events with PostgreSQL row locking (SKIP LOCKED)
 
       const pendingEvents = await this.prisma.$transaction(async (tx) => {
-        const pendingEvents = await tx.$queryRawUnsafe<
-          {
-            id: string;
-            aggregateType: string;
-            aggregateId: string;
-            eventType: string;
-            payload: any;
-            metadata: any;
-            retryCount: number;
-          }[]
-        >(`
+        const pendingEvents = await tx.$queryRawUnsafe<PendingOutboxEvent[]>(`
         SELECT id, aggregate_type as "aggregateType", aggregate_id as "aggregateId",
                event_type as "eventType", payload, metadata, retry_count as "retryCount"
         FROM outbox_events
@@ -112,9 +112,11 @@ export class OutboxRelayerService {
             { result: publishResult ? 'published' : 'failed' },
             (Date.now() - updatedEvent.createdAt.getTime()) / 1000,
           );
-        } catch (error: any) {
+        } catch (error: unknown) {
+          const message =
+            error instanceof Error ? error.message : String(error);
           this.logger.error(
-            `Failed to publish outbox event ${event.id}: ${error.message}`,
+            `Failed to publish outbox event ${event.id}: ${message}`,
           );
           const updatedEvent = await this.prisma.outboxEvent.update({
             where: { id: event.id },
@@ -124,7 +126,7 @@ export class OutboxRelayerService {
                   ? OutboxStatus.FAILED
                   : OutboxStatus.PENDING,
               retryCount: { increment: 1 },
-              errorMessage: error.message,
+              errorMessage: message,
             },
           });
           this.outboxRelayLatency.observe(
@@ -138,7 +140,7 @@ export class OutboxRelayerService {
     }
   }
 
-  private async routeAndPublish(event: any): Promise<boolean> {
+  private async routeAndPublish(event: PendingOutboxEvent): Promise<boolean> {
     const { eventType, id } = event;
 
     switch (eventType) {
